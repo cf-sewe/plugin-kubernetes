@@ -130,10 +130,16 @@ public class PodLogService implements AutoCloseable {
         Instant lastTimestamp = outputStream.getLastTimestamp();
         PodResource podResource = PodService.podRef(client, pod);
 
+        log.info("[FETCH-FINAL-LOGS] Starting final log fetch for pod '{}' since timestamp: {}",
+            pod.getMetadata().getName(),
+            lastTimestamp != null ? lastTimestamp : "beginning");
+
         pod.getSpec()
             .getContainers()
             .forEach(container -> {
                 try {
+                    log.info("[FETCH-FINAL-LOGS] Fetching logs for container '{}'", container.getName());
+
                     String logs = podResource
                         .inContainer(container.getName())
                         .usingTimestamps()
@@ -147,15 +153,26 @@ public class PodLogService implements AutoCloseable {
                         // Parse and write each line to outputStream
                         BufferedReader reader = new BufferedReader(new StringReader(logs));
                         String line;
+                        int lineCount = 0;
                         while ((line = reader.readLine()) != null) {
+                            lineCount++;
+                            log.info("[FETCH-FINAL-LOGS] Container '{}' line #{}: '{}'",
+                                container.getName(), lineCount, line);
                             outputStream.write((line + "\n").getBytes());
                         }
                         outputStream.flush();
+                        log.info("[FETCH-FINAL-LOGS] Container '{}' fetched {} lines total",
+                            container.getName(), lineCount);
+                    } else {
+                        log.info("[FETCH-FINAL-LOGS] Container '{}' returned no additional logs",
+                            container.getName());
                     }
                 } catch (IOException e) {
-                    log.error("Error fetching final logs for container {}", container.getName(), e);
+                    log.error("[FETCH-FINAL-LOGS] Error fetching final logs for container {}", container.getName(), e);
                 }
             });
+
+        log.info("[FETCH-FINAL-LOGS] Completed final log fetch for pod '{}'", pod.getMetadata().getName());
     }
 
     @Override

@@ -41,6 +41,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.*;
@@ -62,15 +63,35 @@ class PodCreateTest {
     @Inject
     private RunContextInitializer runContextInitializer;
 
-    @Test
+    @org.junit.jupiter.api.RepeatedTest(20)  // Run 20 times to catch flakiness
     void run() throws Exception {
+        log.info("=".repeat(80));
+        log.info("Starting run() test - DETERMINISTIC VERSION with .take(14)");
+        log.info("=".repeat(80));
+
+        // Track timing metrics
         AtomicInteger logCounter = new AtomicInteger(0);
+        AtomicLong firstLogTimestamp = new AtomicLong(0);
+        AtomicLong lastLogTimestamp = new AtomicLong(0);
+
+        // Set up Flux consumer with detailed logging
         Flux<LogEntry> receive = TestsUtils.receive(workerTaskLogQueue, logEntry -> {
             if (logEntry.getLeft().getLevel() == Level.INFO) {
-                logCounter.incrementAndGet();
+                int count = logCounter.incrementAndGet();
+                long timestamp = System.currentTimeMillis();
+                if (count == 1) {
+                    firstLogTimestamp.set(timestamp);
+                }
+                lastLogTimestamp.set(timestamp);
+                log.info("[TEST-QUEUE] Received INFO log #{}: '{}' at offset +{}ms",
+                    count,
+                    logEntry.getLeft().getMessage(),
+                    firstLogTimestamp.get() > 0 ? timestamp - firstLogTimestamp.get() : 0);
             }
         });
 
+        // Test with production-like timing: 10s waitForLogInterval
+        log.info("[TEST] Building task with waitForLogInterval=10s");
         PodCreate task = PodCreate.builder()
             .id(PodCreate.class.getSimpleName())
             .type(PodCreate.class.getName())
@@ -96,23 +117,89 @@ class PodCreateTest {
         Execution execution = TestsUtils.mockExecution(flow, Map.of());
         runContext = runContextInitializer.forWorker((DefaultRunContext) runContext, WorkerTask.builder().task(task).taskRun(TestsUtils.mockTaskRun(execution, task)).build());
 
+        log.info("[TEST] Executing task.run() - will wait 10s internally for log collection");
+        long taskStartTime = System.currentTimeMillis();
         PodCreate.Output runOutput = task.run(runContext);
+        long taskEndTime = System.currentTimeMillis();
+        long taskDuration = taskEndTime - taskStartTime;
+
+        log.info("[TEST] task.run() completed after {}ms", taskDuration);
+        log.info("[TEST] Logs already in counter: {}/14", logCounter.get());
 
         assertThat(runOutput.getMetadata().getName(), containsString("iokestrapluginkubernetespodcreatetest-run-podcreate"));
 
-        // Wait for all logs to be collected (expect 14 INFO logs)
-        Await.until(
-            () -> logCounter.get() >= 14,
-            Duration.ofMillis(100),
-            Duration.ofSeconds(5)
-        );
+        // Wait for all logs to be collected using Await.until (polling approach)
+        log.info("[TEST] Starting wait for exactly 14 INFO logs using Await.until()");
+        long collectStartTime = System.currentTimeMillis();
 
-        List<LogEntry> logs = receive.collectList().block();
+        try {
+            Await.until(
+                () -> {
+                    int current = logCounter.get();
+                    if (current < 14) {
+                        log.info("[TEST] Await check: {}/14 logs received", current);
+                    }
+                    return current >= 14;
+                },
+                Duration.ofMillis(500),  // Check every 500ms
+                Duration.ofSeconds(15)   // Timeout: waitForLogInterval (10s) + buffer (5s)
+            );
 
-        assertThat(logs.stream().filter(logEntry -> logEntry.getLevel() == Level.INFO).count(), is(14L));
-        assertThat(logs.stream().filter(logEntry -> logEntry.getLevel() == Level.INFO).filter(logEntry -> logEntry.getMessage().equals("10")).count(), is(1L));
-        assertThat(logs.stream().filter(logEntry -> logEntry.getLevel() == Level.INFO).filter(logEntry -> logEntry.getMessage().contains("is deleted")).count(), is(1L));
-        assertThat(logs.stream().filter(logEntry -> logEntry.getLevel() == Level.INFO).filter(logEntry -> logEntry.getMessage().equals("error")).count(), is(1L));
+            long collectDuration = System.currentTimeMillis() - collectStartTime;
+            log.info("[TEST] Successfully received all 14 logs after {}ms", collectDuration);
+            log.info("[TEST] Total time from task.run() completion: {}ms", System.currentTimeMillis() - taskEndTime);
+
+        } catch (Exception e) {
+            long collectDuration = System.currentTimeMillis() - collectStartTime;
+            log.error("[TEST] FAILED to collect 14 logs after {}ms timeout", collectDuration);
+            log.error("[TEST] Logs in counter at timeout: {}/14", logCounter.get());
+            log.error("[TEST] This indicates either:");
+            log.error("[TEST]   1. Logs lost in Gap #1 (Kubernetes → Queue via fetchFinalLogs)");
+            log.error("[TEST]   2. Logs lost in Gap #2 (Queue → Test consumption)");
+            log.error("[TEST]   3. Pod didn't generate all expected logs");
+
+            // Wait a bit longer to see if more logs arrive
+            log.error("[TEST] Waiting additional 3 seconds to see if more logs arrive...");
+            Thread.sleep(3000);
+            log.error("[TEST] After 3s wait, logs in counter: {}/14", logCounter.get());
+
+            throw e;
+        }
+
+        // Now collect all logs from the Flux
+        log.info("[TEST] Collecting all logs from Flux...");
+        List<LogEntry> logs = receive
+            .filter(logEntry -> logEntry.getLevel() == Level.INFO)
+            .take(Duration.ofMillis(100))  // Just a short wait to collect what's available
+            .collectList()
+            .block();
+
+        // Log all collected logs
+        log.info("[TEST] All {} INFO logs collected in order:", logs.size());
+        logs.forEach(logEntry -> log.info("[TEST]   - '{}'", logEntry.getMessage()));
+
+        // Timing summary
+        long totalTime = System.currentTimeMillis() - taskStartTime;
+        log.info("[TEST] Timing Summary:");
+        log.info("[TEST]   - task.run() execution: {}ms", taskDuration);
+        log.info("[TEST]   - Log collection wait: {}ms", totalTime - taskDuration);
+        log.info("[TEST]   - Total test time: {}ms", totalTime);
+        log.info("[TEST]   - First log offset: +{}ms",
+            firstLogTimestamp.get() > 0 ? firstLogTimestamp.get() - taskStartTime : -1);
+        log.info("[TEST]   - Last log offset: +{}ms",
+            lastLogTimestamp.get() > 0 ? lastLogTimestamp.get() - taskStartTime : -1);
+        log.info("[TEST]   - Log reception window: {}ms",
+            (firstLogTimestamp.get() > 0 && lastLogTimestamp.get() > 0)
+                ? lastLogTimestamp.get() - firstLogTimestamp.get() : -1);
+
+        // Assertions
+        assertThat(logs.size(), is(14));
+        assertThat(logs.stream().filter(logEntry -> logEntry.getMessage().equals("10")).count(), is(1L));
+        assertThat(logs.stream().filter(logEntry -> logEntry.getMessage().contains("is deleted")).count(), is(1L));
+        assertThat(logs.stream().filter(logEntry -> logEntry.getMessage().equals("error")).count(), is(1L));
+
+        log.info("[TEST] Test completed successfully");
+        log.info("=".repeat(80));
     }
 
     @Test
