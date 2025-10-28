@@ -1,8 +1,30 @@
 package io.kestra.plugin.kubernetes;
 
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.empty;
+import static org.hamcrest.Matchers.hasKey;
+import static org.hamcrest.Matchers.is;
+import static org.hamcrest.Matchers.lessThan;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.time.Duration;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+
+import org.junit.jupiter.api.Test;
+import org.junitpioneer.jupiter.RetryingTest;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import com.google.common.io.CharStreams;
+
 import io.fabric8.kubernetes.api.model.ObjectMeta;
 import io.fabric8.kubernetes.api.model.Quantity;
 import io.fabric8.kubernetes.api.model.ResourceRequirements;
@@ -15,7 +37,11 @@ import io.kestra.core.models.flows.Flow;
 import io.kestra.core.models.property.Property;
 import io.kestra.core.queues.QueueFactoryInterface;
 import io.kestra.core.queues.QueueInterface;
-import io.kestra.core.runners.*;
+import io.kestra.core.runners.DefaultRunContext;
+import io.kestra.core.runners.RunContext;
+import io.kestra.core.runners.RunContextFactory;
+import io.kestra.core.runners.RunContextInitializer;
+import io.kestra.core.runners.WorkerTask;
 import io.kestra.core.storages.StorageInterface;
 import io.kestra.core.tenant.TenantService;
 import io.kestra.core.utils.Await;
@@ -26,25 +52,7 @@ import io.kestra.plugin.kubernetes.services.PodService;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
 import lombok.extern.slf4j.Slf4j;
-import org.junit.jupiter.api.Test;
-import org.junitpioneer.jupiter.RetryingTest;
-import org.slf4j.event.Level;
 import reactor.core.publisher.Flux;
-
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.time.Duration;
-import java.util.Arrays;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.concurrent.atomic.AtomicInteger;
-
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.*;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 
 @KestraTest
 @Slf4j
@@ -127,6 +135,7 @@ class PodCreateTest {
             .type(PodCreate.class.getName())
             .namespace(Property.ofValue("default"))
             .resume(Property.ofValue(false))
+            .waitForLogInterval(Property.ofValue(Duration.ofSeconds(1)))
             .spec(TestUtils.convert(
                 ObjectMeta.class,
                 "containers:",
@@ -163,6 +172,7 @@ class PodCreateTest {
             .id(PodCreate.class.getSimpleName())
             .type(PodCreate.class.getName())
             .namespace(Property.ofValue("default"))
+            .waitForLogInterval(Property.ofValue(Duration.ofSeconds(1)))
             .spec(TestUtils.convert(
                 ObjectMeta.class,
                 "containers:",
@@ -191,7 +201,7 @@ class PodCreateTest {
             .type(PodCreate.class.getName())
             .namespace(Property.ofValue("default"))
             .outputFiles(Property.ofValue(List.of("results.json")))
-            .waitForLogInterval(Property.ofValue(Duration.ofSeconds(10)))
+            .waitForLogInterval(Property.ofValue(Duration.ofSeconds(1)))
             .spec(TestUtils.convert(
                 ObjectMeta.class,
                 "containers:",
@@ -389,6 +399,7 @@ class PodCreateTest {
             .namespace(Property.ofValue("default"))
             .inputFiles(Map.of("data.txt", "{{ outputs['nonexistent-task']['outputFiles']['data.txt'] }}"))
             .waitUntilRunning(Property.ofValue(Duration.ofSeconds(10)))
+            .waitForLogInterval(Property.ofValue(Duration.ofSeconds(1)))
             .delete(Property.ofValue(true))
             .resume(Property.ofValue(false))
             .spec(TestUtils.convert(
@@ -558,7 +569,7 @@ class PodCreateTest {
             .type(PodCreate.class.getName())
             .namespace(Property.ofValue("default"))
             .outputFiles(Property.ofValue(List.of("*.txt")))
-            .waitForLogInterval(Property.ofValue(Duration.ofSeconds(10)))
+            .waitForLogInterval(Property.ofValue(Duration.ofSeconds(1)))
             .spec(TestUtils.convert(
                 ObjectMeta.class,
                 "containers:",
@@ -609,7 +620,7 @@ class PodCreateTest {
             .id(PodCreate.class.getSimpleName())
             .type(PodCreate.class.getName())
             .namespace(Property.ofValue("default"))
-            .waitForLogInterval(Property.ofValue(Duration.ofSeconds(10)))
+            .waitForLogInterval(Property.ofValue(Duration.ofSeconds(1)))
             .fileSidecar(sidecar)
             .inputFiles(Map.of(
                 "in.txt", "File content"
@@ -689,7 +700,7 @@ class PodCreateTest {
             .type(PodCreate.class.getName())
             .namespace(Property.ofValue("default"))
             .outputFiles(Property.ofValue(List.of("**.txt")))
-            .waitForLogInterval(Property.ofValue(Duration.ofSeconds(10)))
+            .waitForLogInterval(Property.ofValue(Duration.ofSeconds(1)))
             .spec(TestUtils.convert(
                 ObjectMeta.class,
                 "containers:",
@@ -735,6 +746,7 @@ class PodCreateTest {
             .id(PodCreate.class.getSimpleName())
             .type(PodCreate.class.getName())
             .namespace(Property.ofValue("default"))
+            .waitForLogInterval(Property.ofValue(Duration.ofSeconds(1)))
             .spec(TestUtils.convert(
                 ObjectMeta.class,
                 "containers:",
@@ -831,7 +843,7 @@ class PodCreateTest {
             .type(PodCreate.class.getName())
             .namespace(Property.ofValue("default"))
             .outputFiles(Property.ofValue(List.of("result.txt")))
-            .waitForLogInterval(Property.ofValue(Duration.ofSeconds(10)))
+            .waitForLogInterval(Property.ofValue(Duration.ofSeconds(1)))
             .spec(TestUtils.convert(
                 ObjectMeta.class,
                 "containers:",
