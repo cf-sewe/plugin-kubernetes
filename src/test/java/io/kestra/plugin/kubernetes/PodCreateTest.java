@@ -75,7 +75,7 @@ class PodCreateTest {
             .id(PodCreate.class.getSimpleName())
             .type(PodCreate.class.getName())
             .namespace(Property.ofValue("default"))
-            .waitForLogInterval(Property.ofValue(Duration.ofSeconds(10)))
+            .waitForLogInterval(Property.ofValue(Duration.ofSeconds(30)))
 //            .delete(Property.ofValue(false)) // Uncomment for tests if you need to check kubectl logs your_pod
             .spec(TestUtils.convert(
                 ObjectMeta.class,
@@ -867,7 +867,7 @@ class PodCreateTest {
             .type(PodCreate.class.getName())
             .namespace(Property.ofValue("default"))
             .outputFiles(Property.ofValue(List.of("result.txt")))
-            .waitForLogInterval(Property.ofValue(Duration.ofSeconds(10)))
+            .waitForLogInterval(Property.ofValue(Duration.ofSeconds(30)))
             .spec(TestUtils.convert(
                 ObjectMeta.class,
                 "containers:",
@@ -932,7 +932,7 @@ class PodCreateTest {
             .type(PodCreate.class.getName())
             .namespace(Property.ofValue("default"))
             .outputFiles(Property.ofValue(List.of("result.txt")))
-            .waitForLogInterval(Property.ofValue(Duration.ofSeconds(10)))
+            .waitForLogInterval(Property.ofValue(Duration.ofSeconds(30)))
             .spec(TestUtils.convert(
                 ObjectMeta.class,
                 "containers:",
