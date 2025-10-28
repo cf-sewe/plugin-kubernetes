@@ -95,7 +95,7 @@ class PodCreateTest {
                 "  command: ",
                 "    - 'bash' ",
                 "    - '-c'",
-                "    - 'for i in {1..10}; do echo $i; {{ inputs.command }} 0.1; done; >&2 echo \"error\"'",
+                "    - 'seq 1 20 | while read i; do echo \"Log line $i from test pod\"; {{ inputs.command }} 0.05; done; >&2 echo \"error\"'",
                 "restartPolicy: Never"
             ))
             .build();
@@ -110,17 +110,22 @@ class PodCreateTest {
 
         assertThat(runOutput.getMetadata().getName(), containsString("iokestrapluginkubernetespodcreatetest-run-podcreate"));
 
-        // Wait for all logs to be collected (expect 14 INFO logs)
+        // Wait for all logs to be collected (expect 23 INFO logs: 20 log lines + 1 error + 2 framework logs)
         Await.until(
-            () -> logCounter.get() >= 14,
+            () -> logCounter.get() >= 23,
             Duration.ofMillis(100),
             Duration.ofSeconds(5)
         );
 
         List<LogEntry> logs = receive.collectList().block();
 
-        assertThat(logs.stream().filter(logEntry -> logEntry.getLevel() == Level.INFO).count(), is(14L));
-        assertThat(logs.stream().filter(logEntry -> logEntry.getLevel() == Level.INFO).filter(logEntry -> logEntry.getMessage().equals("10")).count(), is(1L));
+        assertThat(logs.stream().filter(logEntry -> logEntry.getLevel() == Level.INFO).count(), is(23L));
+
+        // Verify all 20 log lines are present exactly once (no duplicates)
+        for (int i = 1; i <= 20; i++) {
+            assertLogExactlyOnce(logs, "Log line " + i + " from test pod");
+        }
+
         assertThat(logs.stream().filter(logEntry -> logEntry.getLevel() == Level.INFO).filter(logEntry -> logEntry.getMessage().contains("is deleted")).count(), is(1L));
         assertThat(logs.stream().filter(logEntry -> logEntry.getLevel() == Level.INFO).filter(logEntry -> logEntry.getMessage().equals("error")).count(), is(1L));
     }

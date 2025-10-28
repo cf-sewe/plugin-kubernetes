@@ -17,6 +17,7 @@ import java.io.IOException;
 import java.io.StringReader;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.*;
@@ -37,17 +38,25 @@ public class PodLogService implements AutoCloseable {
     }
 
     public final void watch(KubernetesClient client, Pod pod, AbstractLogConsumer logConsumer, RunContext runContext) {
+        runContext.logger().debug("[PodLogService.watch] ENTER: Creating watch for pod '{}'", pod.getMetadata().getName());
+
         scheduledExecutor = Executors.newSingleThreadScheduledExecutor(threadFactoryBuilder.build("k8s-log"));
         outputStream = new LoggingOutputStream(logConsumer);
         AtomicBoolean started = new AtomicBoolean(false);
+
+        runContext.logger().debug("[PodLogService.watch] Starting scheduledExecutor with 30s fixed rate");
 
         scheduledFuture = scheduledExecutor.scheduleAtFixedRate(
             () -> {
                 Instant lastTimestamp = outputStream.getLastTimestamp() == null ? null : Instant.from(outputStream.getLastTimestamp());
 
+                runContext.logger().debug("[PodLogService.watch] Scheduled task executing: started={}, lastTimestamp={}",
+                    started.get(), lastTimestamp);
+
                 if (!started.get() || lastTimestamp == null || lastTimestamp.isBefore(Instant.now().minus(Duration.ofMinutes(10)))) {
                     if (!started.get()) {
                         started.set(true);
+                        runContext.logger().debug("[PodLogService.watch] First execution - setting up watchLog() streams");
                     } else {
                         runContext.logger().trace("No log since '{}', reconnecting", lastTimestamp == null ? "unknown" : lastTimestamp.toString());
                     }
@@ -65,15 +74,20 @@ public class PodLogService implements AutoCloseable {
                             .getContainers()
                             .forEach(container -> {
                                 try {
+                                    String sinceTimeParam = lastTimestamp != null ?
+                                        lastTimestamp.plusNanos(1).toString() :
+                                        null;
+                                    runContext.logger().debug("[PodLogService.watch] Creating watchLog() for container '{}': sinceTime={}, lastTimestamp={}",
+                                        container.getName(), sinceTimeParam, lastTimestamp);
+
                                     podLogs.add(podResource
                                         .inContainer(container.getName())
                                         .usingTimestamps()
-                                        .sinceTime(lastTimestamp != null ?
-                                            lastTimestamp.plusNanos(1).toString() :
-                                            null
-                                        )
+                                        .sinceTime(sinceTimeParam)
                                         .watchLog(outputStream)
                                     );
+
+                                    runContext.logger().debug("[PodLogService.watch] watchLog() created for container '{}'", container.getName());
                                 } catch (KubernetesClientException e) {
                                     if (e.getCode() == 404) {
                                         runContext.logger().info("Pod no longer exists, stopping log collection");
@@ -91,12 +105,18 @@ public class PodLogService implements AutoCloseable {
                             throw e;
                         }
                     }
+
+                    runContext.logger().debug("[PodLogService.watch] Scheduled task completed setup. Active watchLog streams: {}", podLogs.size());
+                } else {
+                    runContext.logger().debug("[PodLogService.watch] Scheduled task - watchLog still active, lastTimestamp recently updated: {}", lastTimestamp);
                 }
             },
             0,
             30,
             TimeUnit.SECONDS
         );
+
+        runContext.logger().debug("[PodLogService.watch] EXIT: Watch setup complete, scheduledExecutor started");
 
         // look at exception on the main thread
         thread = Thread.ofVirtual().name("k8s-listener").start(
@@ -122,7 +142,7 @@ public class PodLogService implements AutoCloseable {
         );
     }
 
-    public void fetchFinalLogs(KubernetesClient client, Pod pod) throws IOException {
+    public void fetchFinalLogs(KubernetesClient client, Pod pod, RunContext runContext) throws IOException {
         if (outputStream == null) {
             return;
         }
@@ -130,32 +150,82 @@ public class PodLogService implements AutoCloseable {
         Instant lastTimestamp = outputStream.getLastTimestamp();
         PodResource podResource = PodService.podRef(client, pod);
 
+        runContext.logger().debug("[PodLogService.fetchFinalLogs] Starting final log fetch with lastTimestamp: {}", lastTimestamp);
+
         pod.getSpec()
             .getContainers()
             .forEach(container -> {
                 try {
+                    // Use sinceTime as a hint to K8s API (may return more than requested, so we filter locally)
+                    String sinceTimeParam = lastTimestamp != null ?
+                        lastTimestamp.plusNanos(1).toString() :
+                        null;
+
+                    runContext.logger().debug("[PodLogService.fetchFinalLogs] Fetching logs for container '{}' with sinceTime={} (will filter locally by lastTimestamp: {})",
+                        container.getName(), sinceTimeParam, lastTimestamp);
+
                     String logs = podResource
                         .inContainer(container.getName())
                         .usingTimestamps()
-                        .sinceTime(lastTimestamp != null ?
-                            lastTimestamp.plusNanos(1).toString() :
-                            null
-                        )
+                        .sinceTime(sinceTimeParam)
                         .getLog();
 
                     if (logs != null && !logs.isEmpty()) {
-                        // Parse and write each line to outputStream
+                        int totalLineCount = logs.split("\n").length;
+                        runContext.logger().debug("[PodLogService.fetchFinalLogs] Received {} total lines from K8s API for container '{}'",
+                            totalLineCount, container.getName());
+
+                        // Parse and filter logs to only write lines after lastTimestamp
                         BufferedReader reader = new BufferedReader(new StringReader(logs));
                         String line;
+                        int linesWritten = 0;
+                        int linesSkipped = 0;
+
                         while ((line = reader.readLine()) != null) {
-                            outputStream.write((line + "\n").getBytes());
+                            // Extract timestamp from log line to compare
+                            String[] parts = line.split("\\s+", 2);
+                            if (parts.length >= 1 && lastTimestamp != null) {
+                                try {
+                                    Instant lineTimestamp = Instant.parse(parts[0]);
+
+                                    // Only write logs that are AFTER lastTimestamp
+                                    if (lineTimestamp.isAfter(lastTimestamp)) {
+                                        runContext.logger().debug("[PodLogService.fetchFinalLogs] Writing new log line (timestamp {}): '{}'",
+                                            lineTimestamp, line.substring(0, Math.min(100, line.length())));
+                                        outputStream.write((line + "\n").getBytes());
+                                        linesWritten++;
+                                    } else {
+                                        linesSkipped++;
+                                        runContext.logger().debug("[PodLogService.fetchFinalLogs] Skipping already-streamed log (timestamp {} <= {})",
+                                            lineTimestamp, lastTimestamp);
+                                    }
+                                } catch (DateTimeParseException e) {
+                                    // If timestamp parsing fails, write the line (better to duplicate than miss)
+                                    runContext.logger().debug("[PodLogService.fetchFinalLogs] Could not parse timestamp, writing line: '{}'",
+                                        line.substring(0, Math.min(100, line.length())));
+                                    outputStream.write((line + "\n").getBytes());
+                                    linesWritten++;
+                                }
+                            } else {
+                                // No lastTimestamp or no timestamp in line, write it
+                                outputStream.write((line + "\n").getBytes());
+                                linesWritten++;
+                            }
                         }
+
                         outputStream.flush();
+                        runContext.logger().debug("[PodLogService.fetchFinalLogs] Wrote {} new lines, skipped {} already-streamed lines for container '{}'",
+                            linesWritten, linesSkipped, container.getName());
+                    } else {
+                        runContext.logger().debug("[PodLogService.fetchFinalLogs] No logs fetched for container '{}' (logs was {})",
+                            container.getName(), logs == null ? "null" : "empty");
                     }
                 } catch (IOException e) {
-                    log.error("Error fetching final logs for container {}", container.getName(), e);
+                    runContext.logger().error("Error fetching final logs for container {}", container.getName(), e);
                 }
             });
+
+        runContext.logger().debug("[PodLogService.fetchFinalLogs] Completed. Final lastTimestamp: {}", outputStream.getLastTimestamp());
     }
 
     @Override

@@ -439,7 +439,7 @@ public class PodCreate extends AbstractPod implements RunnableTask<PodCreate.Out
         Thread.sleep(runContext.render(this.waitForLogInterval).as(Duration.class).orElseThrow().toMillis());
 
         // Fetch any remaining logs that the watch stream may have missed
-        podLogService.fetchFinalLogs(client, ended);
+        podLogService.fetchFinalLogs(client, ended, runContext);
 
         // Check for failures based on whether outputFiles are configured
         if (hasOutputFiles) {
