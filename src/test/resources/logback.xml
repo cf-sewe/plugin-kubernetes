@@ -4,6 +4,9 @@
     <include resource="logback/text.xml" />
     <include resource="logback/test.xml" />
 
+    <!-- Enable DEBUG level for task logs (runContext.logger()) -->
+    <!-- <logger name="flow.run" level="INFO" /> -->
+
     <root level="WARN">
         <appender-ref ref="STDOUT" />
         <appender-ref ref="STDERR" />
