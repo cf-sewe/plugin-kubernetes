@@ -938,7 +938,7 @@ class PodCreateTest {
                 "  command:",
                 "    - 'bash'",
                 "    - '-c'",
-                "    - 'seq 1 20 | while read i; do echo \"Quick termination log line $i\"; done; echo \"FINAL\" && exit 1'",
+                "    - 'seq 1 20 | while read i; do echo \"Quick termination log line $i\"; sleep 0.05; done; echo \"FINAL\" && exit 1'",
                 "restartPolicy: Never"
             ))
             .build();
