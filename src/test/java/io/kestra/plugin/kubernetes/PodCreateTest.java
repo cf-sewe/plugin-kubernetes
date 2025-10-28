@@ -18,6 +18,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
+import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 import org.junitpioneer.jupiter.RetryingTest;
 
@@ -80,7 +81,7 @@ class PodCreateTest {
         assertThat("Missing or duplicate log: " + expectedMessage, count, is(1L));
     }
 
-    @Test
+    @RepeatedTest(10)
     void run() throws Exception {
         Flux<LogEntry> receive = TestsUtils.receive(workerTaskLogQueue);
 
@@ -870,7 +871,7 @@ class PodCreateTest {
         assertThat(content.trim(), is("Task succeeded"));
     }
 
-    @Test
+    @RepeatedTest(10)
     void multipleContainersOneFailsWithOutputFiles() throws Exception {
         Flux<LogEntry> receive = TestsUtils.receive(workerTaskLogQueue);
 
