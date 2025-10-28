@@ -37,11 +37,17 @@ public class PodLogService implements AutoCloseable {
         this.threadFactoryBuilder = threadFactoryBuilder;
     }
 
+    public void setLogConsumer(AbstractLogConsumer logConsumer) {
+        if (outputStream == null) {
+            outputStream = new LoggingOutputStream(logConsumer);
+        }
+    }
+
     public final void watch(KubernetesClient client, Pod pod, AbstractLogConsumer logConsumer, RunContext runContext) {
         runContext.logger().debug("[PodLogService.watch] ENTER: Creating watch for pod '{}'", pod.getMetadata().getName());
 
         scheduledExecutor = Executors.newSingleThreadScheduledExecutor(threadFactoryBuilder.build("k8s-log"));
-        outputStream = new LoggingOutputStream(logConsumer);
+        setLogConsumer(logConsumer);
         AtomicBoolean started = new AtomicBoolean(false);
 
         runContext.logger().debug("[PodLogService.watch] Starting scheduledExecutor with 30s fixed rate");

@@ -65,7 +65,7 @@ abstract public class PodService {
             );
     }
 
-    public static Pod waitForContainersRunning(KubernetesClient client, Pod pod, Duration waitUntilRunning) {
+    public static Pod waitForContainersStartedOrCompleted(KubernetesClient client, Pod pod, Duration waitUntilRunning) {
         return PodService.podRef(client, pod)
             .waitUntilCondition(
                 j -> j != null &&
@@ -75,7 +75,7 @@ abstract public class PodService {
                          j.getStatus().getContainerStatuses().stream()
                              .anyMatch(c -> c.getState().getRunning() != null))
                         ||
-                        "Failed".equals(j.getStatus().getPhase())
+                        COMPLETED_PHASES.contains(j.getStatus().getPhase())
                     ),
                 waitUntilRunning.toSeconds(),
                 TimeUnit.SECONDS
