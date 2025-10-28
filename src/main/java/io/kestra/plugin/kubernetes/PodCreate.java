@@ -295,9 +295,12 @@ public class PodCreate extends AbstractPod implements RunnableTask<PodCreate.Out
                         // This ensures watchLog() API has containers to attach to
                         pod = PodService.waitForContainersRunning(client, pod, Duration.ofSeconds(30));
 
-                        // watch log
+                        // Only start log streaming if pod is actually running
+                        // For pods that fail quickly, fetchFinalLogs will handle log collection
                         AbstractLogConsumer logConsumer = new DefaultLogConsumer(runContext);
-                        podLogService.watch(client, pod, logConsumer, runContext);
+                        if (pod.getStatus() != null && "Running".equals(pod.getStatus().getPhase())) {
+                            podLogService.watch(client, pod, logConsumer, runContext);
+                        }
 
                         // wait until completion of the pods
                         Pod ended;

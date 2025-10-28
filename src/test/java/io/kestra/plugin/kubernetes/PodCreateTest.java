@@ -74,12 +74,7 @@ class PodCreateTest {
 
     @Test
     void run() throws Exception {
-        AtomicInteger logCounter = new AtomicInteger(0);
-        Flux<LogEntry> receive = TestsUtils.receive(workerTaskLogQueue, logEntry -> {
-            if (logEntry.getLeft().getLevel() == Level.INFO) {
-                logCounter.incrementAndGet();
-            }
-        });
+        Flux<LogEntry> receive = TestsUtils.receive(workerTaskLogQueue);
 
         PodCreate task = PodCreate.builder()
             .id(PodCreate.class.getSimpleName())
@@ -456,7 +451,7 @@ class PodCreateTest {
                 "  command: ",
                 "    - 'bash' ",
                 "    - '-c'",
-                "    - 'for i in {1..10}; do echo $i; {{ inputs.command }} 0.1; done'",
+                "    - 'seq 1 10 | while read i; do echo \"Resume log line $i\"; {{ inputs.command }} 0.1; done'",
                 "restartPolicy: Never"
             ))
             .resume(Property.ofValue(true))
@@ -473,7 +468,7 @@ class PodCreateTest {
         ExecutorService executorService = Executors.newSingleThreadExecutor();
 
         Flux<LogEntry> shutdownReceive = TestsUtils.receive(workerTaskLogQueue, logEntry -> {
-            if (logEntry.getLeft().getMessage().equals("1")) {
+            if (logEntry.getLeft().getMessage() != null && logEntry.getLeft().getMessage().equals("Resume log line 1")) {
                 executorService.shutdownNow();
             }
         });
@@ -491,7 +486,8 @@ class PodCreateTest {
 
         task.run(finalRunContext);
 
-        assertThat(receive.toStream().filter(logEntry -> logEntry.getLevel() == Level.INFO).filter(logEntry -> logEntry.getMessage().equals("10")).count(), greaterThan(0L));
+        List<LogEntry> logs = receive.toStream().toList();
+        assertLogExactlyOnce(logs, "Resume log line 10");
     }
 
     @RetryingTest(value = 3)
@@ -864,20 +860,14 @@ class PodCreateTest {
 
     @Test
     void multipleContainersOneFailsWithOutputFiles() throws Exception {
-        AtomicInteger logCounter = new AtomicInteger(0);
-        Flux<LogEntry> receive = TestsUtils.receive(workerTaskLogQueue, logEntry -> {
-            String message = logEntry.getLeft().getMessage();
-            if (message != null && (message.equals("First container succeeded") || message.equals("Second container failing"))) {
-                logCounter.incrementAndGet();
-            }
-        });
+        Flux<LogEntry> receive = TestsUtils.receive(workerTaskLogQueue);
 
         PodCreate task = PodCreate.builder()
             .id(PodCreate.class.getSimpleName())
             .type(PodCreate.class.getName())
             .namespace(Property.ofValue("default"))
             .outputFiles(Property.ofValue(List.of("result.txt")))
-            .waitForLogInterval(Property.ofValue(Duration.ofSeconds(30)))
+            .waitForLogInterval(Property.ofValue(Duration.ofSeconds(10)))
             .spec(TestUtils.convert(
                 ObjectMeta.class,
                 "containers:",
@@ -906,12 +896,9 @@ class PodCreateTest {
         assertThat(exception.getMessage(), containsString("container-failure"));
         assertThat(exception.getMessage(), containsString("exit code 1"));
 
-        // Wait for logs from both containers to be collected
-        Await.until(
-            () -> logCounter.get() >= 2,
-            Duration.ofMillis(100),
-            Duration.ofSeconds(5)
-        );
+        // task.run() is synchronous and fetchFinalLogs() has completed by now
+        // Just wait for the async log queue consumer to catch up and process all logs from the database
+        Thread.sleep(Duration.ofSeconds(2).toMillis());
 
         List<LogEntry> logs = receive.collectList().block();
 
@@ -922,13 +909,7 @@ class PodCreateTest {
 
     @Test
     void completeLogCollectionAfterQuickTermination() throws Exception {
-        AtomicInteger expectedLogCounter = new AtomicInteger(0);
-        Flux<LogEntry> receive = TestsUtils.receive(workerTaskLogQueue, logEntry -> {
-            String message = logEntry.getLeft().getMessage();
-            if (message != null && (message.startsWith("Log line ") || message.equals("FINAL"))) {
-                expectedLogCounter.incrementAndGet();
-            }
-        });
+        Flux<LogEntry> receive = TestsUtils.receive(workerTaskLogQueue);
 
         // Generate exactly 20 identifiable log lines in quick succession, then fail
         PodCreate task = PodCreate.builder()
@@ -936,7 +917,7 @@ class PodCreateTest {
             .type(PodCreate.class.getName())
             .namespace(Property.ofValue("default"))
             .outputFiles(Property.ofValue(List.of("result.txt")))
-            .waitForLogInterval(Property.ofValue(Duration.ofSeconds(30)))
+            .waitForLogInterval(Property.ofValue(Duration.ofSeconds(10)))
             .spec(TestUtils.convert(
                 ObjectMeta.class,
                 "containers:",
@@ -945,7 +926,7 @@ class PodCreateTest {
                 "  command:",
                 "    - 'bash'",
                 "    - '-c'",
-                "    - 'for i in {1..20}; do echo \"Log line $i\"; done; echo \"FINAL\" && exit 1'",
+                "    - 'seq 1 20 | while read i; do echo \"Quick termination log line $i\"; done; echo \"FINAL\" && exit 1'",
                 "restartPolicy: Never"
             ))
             .build();
@@ -957,18 +938,15 @@ class PodCreateTest {
         RunContext runContextFinal = runContextInitializer.forWorker((DefaultRunContext) runContext, WorkerTask.builder().task(task).taskRun(taskRun).build());
         assertThrows(IllegalStateException.class, () -> task.run(runContextFinal));
 
-        // Wait for all logs to be collected with retry mechanism (expect 20 numbered + 1 FINAL = 21 logs)
-        Await.until(
-            () -> expectedLogCounter.get() >= 21,
-            Duration.ofMillis(100),
-            Duration.ofSeconds(5)
-        );
+        // task.run() is synchronous and fetchFinalLogs() has completed by now
+        // Just wait for the async log queue consumer to catch up and process all logs from the database
+        Thread.sleep(Duration.ofSeconds(2).toMillis());
 
         List<LogEntry> logs = receive.collectList().block();
 
         // Verify all 20 numbered logs + FINAL were collected exactly once (no missing/duplicates)
         for (int i = 1; i <= 20; i++) {
-            assertLogExactlyOnce(logs, "Log line " + i);
+            assertLogExactlyOnce(logs, "Quick termination log line " + i);
         }
         assertLogExactlyOnce(logs, "FINAL");
     }

@@ -69,11 +69,14 @@ abstract public class PodService {
         return PodService.podRef(client, pod)
             .waitUntilCondition(
                 j -> j != null &&
-                    j.getStatus() != null &&
-                    "Running".equals(j.getStatus().getPhase()) &&
-                    j.getStatus().getContainerStatuses() != null &&
-                    j.getStatus().getContainerStatuses().stream()
-                        .anyMatch(c -> c.getState().getRunning() != null),
+                    j.getStatus() != null && (
+                        ("Running".equals(j.getStatus().getPhase()) &&
+                         j.getStatus().getContainerStatuses() != null &&
+                         j.getStatus().getContainerStatuses().stream()
+                             .anyMatch(c -> c.getState().getRunning() != null))
+                        ||
+                        "Failed".equals(j.getStatus().getPhase())
+                    ),
                 waitUntilRunning.toSeconds(),
                 TimeUnit.SECONDS
             );
