@@ -1,7 +1,31 @@
 package io.kestra.plugin.kubernetes;
 
+import static io.kestra.core.utils.Rethrow.throwFunction;
+import static io.kestra.plugin.kubernetes.services.PodService.waitForCompletion;
+
+import java.io.InterruptedIOException;
+import java.net.URI;
+import java.nio.file.Path;
+import java.time.Duration;
+import java.util.AbstractMap;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Collectors;
+
+import org.slf4j.Logger;
+
 import com.google.common.collect.ImmutableMap;
-import io.fabric8.kubernetes.api.model.*;
+
+import io.fabric8.kubernetes.api.model.ListOptionsBuilder;
+import io.fabric8.kubernetes.api.model.ObjectMeta;
+import io.fabric8.kubernetes.api.model.Pod;
+import io.fabric8.kubernetes.api.model.PodBuilder;
+import io.fabric8.kubernetes.api.model.PodSpec;
 import io.fabric8.kubernetes.client.KubernetesClient;
 import io.fabric8.kubernetes.client.Watch;
 import io.kestra.core.exceptions.IllegalVariableEvaluationException;
@@ -10,13 +34,12 @@ import io.kestra.core.models.annotations.Plugin;
 import io.kestra.core.models.annotations.PluginProperty;
 import io.kestra.core.models.flows.State;
 import io.kestra.core.models.property.Property;
+import io.kestra.core.models.tasks.RunnableTask;
 import io.kestra.core.models.tasks.runners.AbstractLogConsumer;
 import io.kestra.core.models.tasks.runners.DefaultLogConsumer;
 import io.kestra.core.models.tasks.runners.PluginUtilsService;
 import io.kestra.core.models.tasks.runners.ScriptService;
-import io.kestra.core.models.tasks.RunnableTask;
 import io.kestra.core.runners.DefaultRunContext;
-import io.kestra.core.runners.FilesService;
 import io.kestra.core.runners.RunContext;
 import io.kestra.core.utils.IdUtils;
 import io.kestra.core.utils.ThreadMainFactoryBuilder;
@@ -28,24 +51,10 @@ import io.kestra.plugin.kubernetes.services.PodLogService;
 import io.kestra.plugin.kubernetes.services.PodService;
 import io.kestra.plugin.kubernetes.watchers.PodWatcher;
 import io.swagger.v3.oas.annotations.media.Schema;
+import jakarta.validation.constraints.NotNull;
 import lombok.*;
 import lombok.experimental.SuperBuilder;
 import lombok.extern.slf4j.Slf4j;
-import org.slf4j.Logger;
-
-import java.io.InterruptedIOException;
-import java.net.URI;
-import java.nio.file.Path;
-import java.time.Duration;
-import java.util.*;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.stream.Collectors;
-
-import jakarta.validation.constraints.NotNull;
-
-import static io.kestra.core.utils.Rethrow.throwFunction;
-import static io.kestra.plugin.kubernetes.services.PodService.waitForCompletion;
 
 @SuperBuilder
 @ToString
@@ -149,6 +158,7 @@ import static io.kestra.plugin.kubernetes.services.PodService.waitForCompletion;
         )
     }
 )
+
 @Slf4j
 public class PodCreate extends AbstractPod implements RunnableTask<PodCreate.Output> {
     @Schema(
@@ -446,13 +456,14 @@ public class PodCreate extends AbstractPod implements RunnableTask<PodCreate.Out
         Logger logger = runContext.logger();
 
         // Wait for async log stream (watchLog) to finish processing
-        Thread.sleep(runContext.render(this.waitForLogInterval).as(Duration.class).orElseThrow().toMillis());
+        Duration waitInterval = runContext.render(this.waitForLogInterval).as(Duration.class).orElseThrow();
+        Thread.sleep(waitInterval.toMillis());
 
         // Fetch any remaining logs that the watch stream may have missed
         // Check if pod still exists after sleep (may have been deleted during sleep window)
         Pod currentPod = PodService.podRef(client, ended).get();
         if (currentPod != null) {
-            podLogService.fetchFinalLogs(client, ended, runContext);
+            podLogService.fetchFinalLogs(client, ended, runContext, waitInterval);
         } else {
             logger.debug("Pod '{}' was already deleted, skipping fetchFinalLogs", ended.getMetadata().getName());
         }
