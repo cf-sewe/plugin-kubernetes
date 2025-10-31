@@ -107,7 +107,7 @@ class PodCreateTest {
             .id(PodCreate.class.getSimpleName())
             .type(PodCreate.class.getName())
             .namespace(Property.ofValue("default"))
-            .waitForLogInterval(Property.ofValue(Duration.ofSeconds(10)))
+            .waitForLogInterval(Property.ofValue(Duration.ofSeconds(1)))
 //            .delete(Property.ofValue(false)) // Uncomment for tests if you need to check kubectl logs your_pod
             .spec(TestUtils.convert(
                 ObjectMeta.class,
@@ -245,7 +245,7 @@ class PodCreateTest {
             .type(PodCreate.class.getName())
             .namespace(Property.ofValue("default"))
             .outputFiles(Property.ofValue(List.of("results.json")))
-            .waitForLogInterval(Property.ofValue(Duration.ofSeconds(10)))
+            .waitForLogInterval(Property.ofValue(Duration.ofSeconds(1)))
             .delete(Property.ofValue(true))
             .resume(Property.ofValue(false))
             .spec(TestUtils.convert(
@@ -307,7 +307,7 @@ class PodCreateTest {
             .type(PodCreate.class.getName())
             .namespace(Property.ofValue("default"))
             .outputFiles(Property.ofValue(List.of("results.json")))
-            .waitForLogInterval(Property.ofValue(Duration.ofSeconds(10)))
+            .waitForLogInterval(Property.ofValue(Duration.ofSeconds(1)))
             .delete(Property.ofValue(true))
             .resume(Property.ofValue(false))
             .spec(TestUtils.convert(
@@ -467,7 +467,7 @@ class PodCreateTest {
             .id(PodCreate.class.getSimpleName())
             .type(PodCreate.class.getName())
             .namespace(Property.ofValue("default"))
-            .waitForLogInterval(Property.ofValue(Duration.ofSeconds(10)))
+            .waitForLogInterval(Property.ofValue(Duration.ofSeconds(1)))
 //            .delete(Property.ofValue(false)) // Uncomment for tests if you need to check kubectl logs your_pod
             .spec(TestUtils.convert(
                 ObjectMeta.class,
@@ -523,7 +523,7 @@ class PodCreateTest {
             .type(PodCreate.class.getName())
             .namespace(Property.ofValue("default"))
             .outputFiles(Property.ofValue(Arrays.asList("xml", "csv")))
-            .waitForLogInterval(Property.ofValue(Duration.ofSeconds(10)))
+            .waitForLogInterval(Property.ofValue(Duration.ofSeconds(1)))
 //            .delete(Property.ofValue(false)) // Uncomment for tests if you need to check kubectl logs your_pod
             .inputFiles(Map.of(
                 "files/in/in.txt", "I'm here",
@@ -821,7 +821,7 @@ class PodCreateTest {
             .id("special-char-test")
             .type(PodCreate.class.getName())
             .namespace(Property.ofValue("default"))
-            .waitForLogInterval(Property.ofValue(Duration.ofSeconds(10)))
+            .waitForLogInterval(Property.ofValue(Duration.ofSeconds(1)))
             .spec(TestUtils.convert(
                 ObjectMeta.class,
                 "containers:",
