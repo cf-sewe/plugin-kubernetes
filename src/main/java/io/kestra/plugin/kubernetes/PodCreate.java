@@ -445,7 +445,7 @@ public class PodCreate extends AbstractPod implements RunnableTask<PodCreate.Out
         if (runContext.render(delete).as(Boolean.class).orElseThrow()) {
             try {
                 PodService.podRef(client, pod).delete();
-                logger.info("Pod '{}' is deleted ", pod.getMetadata().getName());
+                logger.info("Pod '{}' is deleted", pod.getMetadata().getName());
             } catch (Throwable e) {
                 logger.warn("Unable to delete pod '{}'", pod.getMetadata().getName(), e);
             }
@@ -463,7 +463,7 @@ public class PodCreate extends AbstractPod implements RunnableTask<PodCreate.Out
         // Check if pod still exists after sleep (may have been deleted during sleep window)
         Pod currentPod = PodService.podRef(client, ended).get();
         if (currentPod != null) {
-            podLogService.fetchFinalLogs(client, ended, runContext, waitInterval);
+            podLogService.fetchFinalLogs(client, ended, runContext);
         } else {
             logger.debug("Pod '{}' was already deleted, skipping fetchFinalLogs", ended.getMetadata().getName());
         }

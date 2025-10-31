@@ -14,12 +14,12 @@ import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
 import org.junit.jupiter.api.Test;
-import org.junitpioneer.jupiter.RetryingTest;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
@@ -77,6 +77,25 @@ class PodCreateTest {
         long count = logs.stream()
             .filter(log -> log.getMessage() != null && log.getMessage().equals(expectedMessage))
             .count();
+
+        // Debug: If assertion fails, print all logs and similar messages
+        if (count != 1L) {
+            System.err.println("=== ASSERTION FAILURE DEBUG ===");
+            System.err.println("Expected message: '" + expectedMessage + "'");
+            System.err.println("Count: " + count);
+            System.err.println("Total logs collected: " + logs.size());
+            System.err.println("\nAll collected log messages with timestamps and levels:");
+            logs.forEach(log -> {
+                String msg = log.getMessage();
+                System.err.println("  - [" + log.getTimestamp() + "] [" + log.getLevel() + "] [" + (msg != null ? msg.length() : 0) + " chars] '" + msg + "'");
+            });
+            System.err.println("\nMessages containing '" + expectedMessage.substring(0, Math.min(10, expectedMessage.length())) + "':");
+            logs.stream()
+                .filter(log -> log.getMessage() != null && log.getMessage().contains(expectedMessage.substring(0, Math.min(10, expectedMessage.length()))))
+                .forEach(log -> System.err.println("  - [" + log.getTimestamp() + "] [" + log.getLevel() + "] '" + log.getMessage() + "'"));
+            System.err.println("=== END DEBUG ===\n");
+        }
+
         assertThat("Missing or duplicate log: " + expectedMessage, count, is(1L));
     }
 
@@ -112,10 +131,6 @@ class PodCreateTest {
         PodCreate.Output runOutput = task.run(runContext);
 
         assertThat(runOutput.getMetadata().getName(), containsString("iokestrapluginkubernetespodcreatetest-run-podcreate"));
-
-        // task.run() is synchronous and fetchFinalLogs() has completed by now
-        // Just wait for the async log queue consumer to catch up and process all logs from the database
-        Thread.sleep(Duration.ofSeconds(1).toMillis());
 
         List<LogEntry> logs = receive.collectList().block();
 
@@ -501,7 +516,7 @@ class PodCreateTest {
         assertLogExactlyOnce(logs, "Resume log line 10");
     }
 
-    @RetryingTest(value = 3)
+    @Test
     void inputOutputFiles() throws Exception {
         PodCreate task = PodCreate.builder()
             .id(PodCreate.class.getSimpleName())
@@ -908,10 +923,6 @@ class PodCreateTest {
         assertThat(exception.getMessage(), containsString("container-failure"));
         assertThat(exception.getMessage(), containsString("exit code 1"));
 
-        // task.run() is synchronous and fetchFinalLogs() has completed by now
-        // Just wait for the async log queue consumer to catch up and process all logs from the database
-        Thread.sleep(Duration.ofSeconds(2).toMillis());
-
         List<LogEntry> logs = receive.collectList().block();
 
         // Verify logs from both containers were collected exactly once (no duplicates)
@@ -921,7 +932,8 @@ class PodCreateTest {
 
     @Test
     void completeLogCollectionAfterQuickTermination() throws Exception {
-        Flux<LogEntry> receive = TestsUtils.receive(workerTaskLogQueue);
+        List<LogEntry> logs = new CopyOnWriteArrayList<>();
+        Flux<LogEntry> receive = TestsUtils.receive(workerTaskLogQueue, l -> logs.add(l.getLeft()));
 
         // Generate exactly 20 identifiable log lines in quick succession, then fail
         PodCreate task = PodCreate.builder()
@@ -938,7 +950,7 @@ class PodCreateTest {
                 "  command:",
                 "    - 'bash'",
                 "    - '-c'",
-                "    - 'seq 1 20 | while read i; do echo \"Quick termination log line $i\"; sleep 0.05; done; echo \"FINAL\" && exit 1'",
+                "    - 'seq 1 20 | while read i; do echo \"Quick termination log line $i\"; done; echo \"FINAL\" && exit 1'",
                 "restartPolicy: Never"
             ))
             .build();
@@ -950,16 +962,20 @@ class PodCreateTest {
         RunContext runContextFinal = runContextInitializer.forWorker((DefaultRunContext) runContext, WorkerTask.builder().task(task).taskRun(taskRun).build());
         assertThrows(IllegalStateException.class, () -> task.run(runContextFinal));
 
-        // task.run() is synchronous and fetchFinalLogs() has completed by now
-        // Just wait for the async log queue consumer to catch up and process all logs from the database
-        Thread.sleep(Duration.ofSeconds(2).toMillis());
+        // Wait for all 20 numbered logs (ignores DEBUG/system logs from queue)
+        TestsUtils.awaitLogs(logs,
+            log -> log.getMessage() != null && log.getMessage().contains("Quick termination log line"),
+            20);
 
-        List<LogEntry> logs = receive.collectList().block();
+        // Wait for Flux completion (ensures FINAL and any remaining logs are processed)
+        receive.blockLast();
 
-        // Verify all 20 numbered logs + FINAL were collected exactly once (no missing/duplicates)
+        // Verify all 20 log lines are present exactly once (no duplicates, no missing)
         for (int i = 1; i <= 20; i++) {
             assertLogExactlyOnce(logs, "Quick termination log line " + i);
         }
+
+        // Verify 'FINAL' log appears exactly once
         assertLogExactlyOnce(logs, "FINAL");
     }
 
